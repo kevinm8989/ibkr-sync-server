@@ -45,10 +45,11 @@ app.delete('/trades', (_req, res) => {
 
 async function runSync() {
   console.log('[sync] Starting IBKR Flex pull...');
-  const token = process.env.IBKR_FLEX_TOKEN;
-  const queryId = process.env.IBKR_FLEX_QUERY_ID;
+  const token = process.env.IBKR_FLEX_TOKEN || '296850575658907783704576';
+  const queryId = process.env.IBKR_FLEX_QUERY_ID || '1472333';
   if (!token || !queryId) {
     throw new Error('IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID env vars are required.');
+  }
   }
   const raw = await fetchFlexReport(token, queryId);
   const incoming = parseTrades(raw);
