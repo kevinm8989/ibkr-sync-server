@@ -6,7 +6,7 @@ import { parseTrades } from './parser.js';
 import { db } from './db.js';
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -47,10 +47,7 @@ async function runSync() {
   console.log('[sync] Starting IBKR Flex pull...');
   const token = process.env.IBKR_FLEX_TOKEN || '296850575658907783704576';
   const queryId = process.env.IBKR_FLEX_QUERY_ID || '1472333';
-  if (!token || !queryId) {
-    throw new Error('IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID env vars are required.');
-  }
-  }
+  console.log('[sync] Token length:', token.length, 'QueryId:', queryId);
   const raw = await fetchFlexReport(token, queryId);
   const incoming = parseTrades(raw);
   const existing = db.get('trades') || [];
