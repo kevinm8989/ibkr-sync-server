@@ -11,17 +11,23 @@ const PORT = process.env.PORT || 3001;
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// ── Get all trades ────────────────────────────────────────────────────────────
+app.get('/debug', (_req, res) => {
+  res.json({
+    hasToken: !!process.env.IBKR_FLEX_TOKEN,
+    hasQueryId: !!process.env.IBKR_FLEX_QUERY_ID,
+    tokenLength: (process.env.IBKR_FLEX_TOKEN || '').length,
+    queryId: process.env.IBKR_FLEX_QUERY_ID || 'not set'
+  });
+});
+
 app.get('/trades', (_req, res) => {
   const trades = db.get('trades') || [];
   const lastSync = db.get('lastSync');
   res.json({ trades, lastSync, count: trades.length });
 });
 
-// ── Manual sync trigger ───────────────────────────────────────────────────────
 app.post('/sync', async (_req, res) => {
   try {
     const result = await runSync();
@@ -32,44 +38,31 @@ app.post('/sync', async (_req, res) => {
   }
 });
 
-// ── Clear trades (dev/reset) ──────────────────────────────────────────────────
 app.delete('/trades', (_req, res) => {
   db.set('trades', []);
   res.json({ ok: true });
 });
 
-// ── Core sync logic ───────────────────────────────────────────────────────────
 async function runSync() {
   console.log('[sync] Starting IBKR Flex pull...');
-
   const token = process.env.IBKR_FLEX_TOKEN;
   const queryId = process.env.IBKR_FLEX_QUERY_ID;
-
   if (!token || !queryId) {
     throw new Error('IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID env vars are required.');
   }
-
   const raw = await fetchFlexReport(token, queryId);
   const incoming = parseTrades(raw);
-
   const existing = db.get('trades') || [];
-
-  // Deduplicate by a composite key: date + symbol + entry + shares
   const key = t => `${t.date}|${t.sym}|${t.entry}|${t.shares}|${t.side}`;
   const existingKeys = new Set(existing.map(key));
   const newTrades = incoming.filter(t => !existingKeys.has(key(t)));
-
   const merged = [...existing, ...newTrades].sort((a, b) => new Date(b.date) - new Date(a.date));
   db.set('trades', merged);
   db.set('lastSync', new Date().toISOString());
-
   console.log(`[sync] Done. ${newTrades.length} new trades added (${merged.length} total).`);
   return { added: newTrades.length, total: merged.length, lastSync: db.get('lastSync') };
 }
 
-// ── Scheduled sync: 6:00 AM ET Mon–Fri ───────────────────────────────────────
-// Cron runs in server timezone; Railway servers are typically UTC.
-// 6am ET = 11am UTC (EST) or 10am UTC (EDT). Using 11am UTC to be safe.
 cron.schedule('0 11 * * 1-5', async () => {
   console.log('[cron] Running scheduled morning sync...');
   try {
