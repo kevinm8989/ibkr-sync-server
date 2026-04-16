@@ -19,11 +19,12 @@ function parseXML(xml) {
     const qty = parseFloat(attrs.quantity || attrs.Quantity || 0);
     const price = parseFloat(attrs.tradePrice || attrs.price || attrs.Price || 0);
     const comm = Math.abs(parseFloat(attrs.ibCommission || attrs.commission || attrs.Commission || 0));
-    const dateRaw = attrs.tradeDate || attrs.dateTime || attrs.TradeDate || '';
+    const dateRaw = attrs.dateTime || attrs.tradeDate || attrs.TradeDate || '';
     const date = normalizeDate(dateRaw);
+    const time = normalizeTime(dateRaw);
     const buySell = (attrs.buySell || attrs.Buy_Sell || '').toUpperCase();
     if (!sym || !qty || !price || !date) continue;
-    executions.push({ sym, qty: Math.abs(qty), price, comm, date, buySell });
+    executions.push({ sym, qty: Math.abs(qty), price, comm, date, time, buySell });
   }
   return groupExecutions(executions);
 }
@@ -37,7 +38,7 @@ function parseCSV(csv) {
   const iQty = col('quantity', 'qty');
   const iPrice = col('tradeprice', 'trade price', 'price');
   const iComm = col('ibcommission', 'commission', 'comm');
-  const iDate = col('tradedate', 'datetime', 'date');
+  const iDate = col('datetime', 'tradedate', 'date');
   const iBuySell = col('buysell', 'buy/sell', 'action', 'side');
   const iAsset = col('assetcategory', 'asset category', 'type');
   if (iSym < 0 || iQty < 0 || iPrice < 0) return [];
@@ -52,9 +53,10 @@ function parseCSV(csv) {
     const comm = iComm >= 0 ? Math.abs(parseFloat(cols[iComm]) || 0) : 0;
     const dateRaw = iDate >= 0 ? cols[iDate] : '';
     const date = normalizeDate(dateRaw);
+    const time = normalizeTime(dateRaw);
     const buySell = iBuySell >= 0 ? (cols[iBuySell] || '').toUpperCase() : (qty > 0 ? 'BUY' : 'SELL');
     if (!sym || !qty || !price) continue;
-    executions.push({ sym, qty: Math.abs(qty), price, comm, date, buySell });
+    executions.push({ sym, qty: Math.abs(qty), price, comm, date, time, buySell });
   }
   return groupExecutions(executions);
 }
@@ -79,7 +81,6 @@ function groupExecutions(executions) {
     const isLong = totalBuyQty >= totalSellQty;
 
     if (isLong) {
-      // Long: buys=entries, sells=exits. Each sell = one trade out.
       const buyPool = buys.map(b => ({ ...b }));
       for (const sell of sells) {
         let remaining = sell.qty;
@@ -94,8 +95,10 @@ function groupExecutions(executions) {
         if (!matched.length) continue;
         const totalQty = matched.reduce((a, b) => a + b.qty, 0);
         const avgEntry = matched.reduce((a, b) => a + b.price * b.qty, 0) / totalQty;
+        const tradeTime = buys[0]?.time || sell.time || '';
         trades.push({
           date, sym, side: 'Long',
+          time: tradeTime,
           shares: Math.round(sell.qty),
           entry: round2(avgEntry),
           exit: round2(sell.price),
@@ -104,7 +107,6 @@ function groupExecutions(executions) {
         });
       }
     } else {
-      // Short: sells=entries, buys=exits. Each buy = one trade out.
       const sellPool = sells.map(s => ({ ...s }));
       for (const buy of buys) {
         let remaining = buy.qty;
@@ -119,8 +121,10 @@ function groupExecutions(executions) {
         if (!matched.length) continue;
         const totalQty = matched.reduce((a, s) => a + s.qty, 0);
         const avgEntry = matched.reduce((a, s) => a + s.price * s.qty, 0) / totalQty;
+        const tradeTime = sells[0]?.time || buy.time || '';
         trades.push({
           date, sym, side: 'Short',
+          time: tradeTime,
           shares: Math.round(buy.qty),
           entry: round2(avgEntry),
           exit: round2(buy.price),
@@ -141,6 +145,13 @@ function normalizeDate(raw) {
   const clean = raw.replace(/[;\s].*/, '').replace(/[^0-9-]/g, '');
   if (clean.length === 8) return `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}`;
   return clean.slice(0, 10) || new Date().toISOString().slice(0, 10);
+}
+
+function normalizeTime(raw) {
+  if (!raw) return '';
+  if (raw.includes(';')) return raw.split(';')[1]?.slice(0, 5) || '';
+  if (raw.includes(' ') && raw.length > 10) return raw.split(' ')[1]?.slice(0, 5) || '';
+  return '';
 }
 
 function parseAttrs(attrString) {
