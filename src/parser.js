@@ -142,15 +142,25 @@ function round2(n) { return Math.round(n * 100) / 100; }
 
 function normalizeDate(raw) {
   if (!raw) return new Date().toISOString().slice(0, 10);
-  const clean = raw.replace(/[;\s].*/, '').replace(/[^0-9-]/g, '');
-  if (clean.length === 8) return `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}`;
-  return clean.slice(0, 10) || new Date().toISOString().slice(0, 10);
+  // Handle "yyyyMMdd;HHmmss" or "yyyyMMdd HHmmss" or "yyyy-MM-dd"
+  const datePart = raw.split(/[;\s]/)[0].replace(/[^0-9-]/g, '');
+  if (datePart.length === 8) return `${datePart.slice(0, 4)}-${datePart.slice(4, 6)}-${datePart.slice(6, 8)}`;
+  return datePart.slice(0, 10) || new Date().toISOString().slice(0, 10);
 }
 
 function normalizeTime(raw) {
   if (!raw) return '';
-  if (raw.includes(';')) return raw.split(';')[1]?.slice(0, 5) || '';
-  if (raw.includes(' ') && raw.length > 10) return raw.split(' ')[1]?.slice(0, 5) || '';
+  // IBKR format: "20260416;093000" (yyyyMMdd;HHmmss)
+  const parts = raw.split(/[;\s]/);
+  if (parts.length < 2) return '';
+  const timePart = parts[1].trim();
+  if (!timePart) return '';
+  // timePart is HHmmss — convert to HH:MM
+  if (timePart.length >= 4) {
+    const hh = timePart.slice(0, 2);
+    const mm = timePart.slice(2, 4);
+    return `${hh}:${mm}`;
+  }
   return '';
 }
 
