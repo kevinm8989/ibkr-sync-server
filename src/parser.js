@@ -115,6 +115,8 @@ function buildTrades(executions) {
       const totalQty = matched.reduce((a, b) => a + b.qty, 0);
       const avgEntry = matched.reduce((a, b) => a + b.price * b.qty, 0) / totalQty;
       const entryTime = matched[0].time || '';
+      // Entry comm pro-rated, exit comm applied once in full (not multiplied)
+      const entryCom = matched.reduce((a, b) => a + b.comm, 0);
       trades.push({
         date, sym, side,
         time: entryTime,
@@ -122,7 +124,7 @@ function buildTrades(executions) {
         shares: Math.round(totalQty),
         entry: round2(avgEntry),
         exit: round2(exitPrice),
-        comm: round2(matched.reduce((a, b) => a + b.comm, 0) + (exitQty > 0 ? exitComm * totalQty / exitQty : 0)),
+        comm: round2(entryCom + exitComm),
         stop: 0, strat: 'Import', notes: '', emotion: 'Neutral'
       });
     };
