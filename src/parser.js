@@ -79,14 +79,17 @@ function buildTrades(executions) {
     // Sort by full time including seconds
     execs.sort((a, b) => (a.timeFull || a.time || '').localeCompare(b.timeFull || b.time || ''));
 
-    // Merge partial fills: same buySell + same timeFull + same price → combine into one execution
+    // Merge partial fills: same buySell + same timeFull → combine into one execution
+    // IBKR often breaks single orders into multiple fills at the same second
     const merged = [];
     for (const ex of execs) {
       const last = merged[merged.length - 1];
-      if (last && last.buySell === ex.buySell && last.timeFull === ex.timeFull && Math.abs(last.price - ex.price) < 0.001) {
-        // Same second, same side, same price — merge
+      if (last && last.buySell === ex.buySell && last.timeFull === ex.timeFull) {
+        // Same second, same side — merge (weighted avg price)
+        const totalQty = last.qty + ex.qty;
+        last.price = (last.price * last.qty + ex.price * ex.qty) / totalQty;
         last.comm += ex.comm;
-        last.qty += ex.qty;
+        last.qty = totalQty;
       } else {
         merged.push({ ...ex });
       }
