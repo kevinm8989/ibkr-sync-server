@@ -79,6 +79,19 @@ function buildTrades(executions) {
     // Sort by full time including seconds
     execs.sort((a, b) => (a.timeFull || a.time || '').localeCompare(b.timeFull || b.time || ''));
 
+    // Merge partial fills: same buySell + same timeFull + same price → combine into one execution
+    const merged = [];
+    for (const ex of execs) {
+      const last = merged[merged.length - 1];
+      if (last && last.buySell === ex.buySell && last.timeFull === ex.timeFull && Math.abs(last.price - ex.price) < 0.001) {
+        // Same second, same side, same price — merge
+        last.comm += ex.comm;
+        last.qty += ex.qty;
+      } else {
+        merged.push({ ...ex });
+      }
+    }
+
     let position = 0;
     let openLots = [];
     let side = 'Long';
@@ -111,7 +124,7 @@ function buildTrades(executions) {
       });
     };
 
-    for (const ex of execs) {
+    for (const ex of merged) {
       const isBuy = ex.buySell.startsWith('B');
 
       if (position === 0) {
@@ -133,7 +146,6 @@ function buildTrades(executions) {
         if (Math.abs(position) < 0.001) {
           position = 0; openLots = [];
         } else if (position < 0) {
-          // Flipped short
           side = 'Short';
           openLots = [{ price: ex.price, qty: Math.abs(position), comm: 0, time: ex.time }];
         }
@@ -144,7 +156,6 @@ function buildTrades(executions) {
         if (Math.abs(position) < 0.001) {
           position = 0; openLots = [];
         } else if (position > 0) {
-          // Flipped long
           side = 'Long';
           openLots = [{ price: ex.price, qty: Math.abs(position), comm: 0, time: ex.time }];
         }
@@ -153,7 +164,7 @@ function buildTrades(executions) {
 
     // Close any remaining open position
     if (openLots.length && openLots.some(l => l.qty > 0)) {
-      const last = execs[execs.length - 1];
+      const last = merged[merged.length - 1];
       const totalQty = openLots.reduce((a, l) => a + l.qty, 0);
       const avgEntry = openLots.reduce((a, l) => a + l.price * l.qty, 0) / totalQty;
       trades.push({
