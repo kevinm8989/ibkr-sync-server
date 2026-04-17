@@ -81,7 +81,10 @@ function groupExecutions(executions) {
     const isLong = totalBuyQty >= totalSellQty;
 
     if (isLong) {
+      // Long: entry = first buy time, exit = sell time
       const buyPool = buys.map(b => ({ ...b }));
+      // sort buys by time to get earliest entry
+      const sortedBuys = [...buys].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
       for (const sell of sells) {
         let remaining = sell.qty;
         const matched = [];
@@ -95,10 +98,10 @@ function groupExecutions(executions) {
         if (!matched.length) continue;
         const totalQty = matched.reduce((a, b) => a + b.qty, 0);
         const avgEntry = matched.reduce((a, b) => a + b.price * b.qty, 0) / totalQty;
-        const tradeTime = buys[0]?.time || sell.time || '';
         trades.push({
           date, sym, side: 'Long',
-          time: tradeTime,
+          time: sortedBuys[0]?.time || '',
+          exitTime: sell.time || '',
           shares: Math.round(sell.qty),
           entry: round2(avgEntry),
           exit: round2(sell.price),
@@ -107,7 +110,9 @@ function groupExecutions(executions) {
         });
       }
     } else {
+      // Short: entry = first sell time, exit = buy time
       const sellPool = sells.map(s => ({ ...s }));
+      const sortedSells = [...sells].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
       for (const buy of buys) {
         let remaining = buy.qty;
         const matched = [];
@@ -121,10 +126,10 @@ function groupExecutions(executions) {
         if (!matched.length) continue;
         const totalQty = matched.reduce((a, s) => a + s.qty, 0);
         const avgEntry = matched.reduce((a, s) => a + s.price * s.qty, 0) / totalQty;
-        const tradeTime = sells[0]?.time || buy.time || '';
         trades.push({
           date, sym, side: 'Short',
-          time: tradeTime,
+          time: sortedSells[0]?.time || '',
+          exitTime: buy.time || '',
           shares: Math.round(buy.qty),
           entry: round2(avgEntry),
           exit: round2(buy.price),
@@ -142,7 +147,6 @@ function round2(n) { return Math.round(n * 100) / 100; }
 
 function normalizeDate(raw) {
   if (!raw) return new Date().toISOString().slice(0, 10);
-  // Handle "yyyyMMdd;HHmmss" or "yyyyMMdd HHmmss" or "yyyy-MM-dd"
   const datePart = raw.split(/[;\s]/)[0].replace(/[^0-9-]/g, '');
   if (datePart.length === 8) return `${datePart.slice(0, 4)}-${datePart.slice(4, 6)}-${datePart.slice(6, 8)}`;
   return datePart.slice(0, 10) || new Date().toISOString().slice(0, 10);
@@ -150,17 +154,12 @@ function normalizeDate(raw) {
 
 function normalizeTime(raw) {
   if (!raw) return '';
-  // IBKR format: "20260416;093000" (yyyyMMdd;HHmmss)
   const parts = raw.split(/[;\s]/);
   if (parts.length < 2) return '';
   const timePart = parts[1].trim();
   if (!timePart) return '';
-  // timePart is HHmmss — convert to HH:MM
-  if (timePart.length >= 4) {
-    const hh = timePart.slice(0, 2);
-    const mm = timePart.slice(2, 4);
-    return `${hh}:${mm}`;
-  }
+  if (timePart.includes(':')) return timePart.slice(0, 5);
+  if (timePart.length >= 4) return `${timePart.slice(0, 2)}:${timePart.slice(2, 4)}`;
   return '';
 }
 
