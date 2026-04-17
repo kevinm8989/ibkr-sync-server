@@ -26,7 +26,7 @@ function parseXML(xml) {
     if (!sym || !qty || !price || !date) continue;
     executions.push({ sym, qty: Math.abs(qty), price, comm, date, time, buySell });
   }
-  return groupExecutions(executions);
+  return buildTrades(executions);
 }
 
 function parseCSV(csv) {
@@ -58,101 +58,142 @@ function parseCSV(csv) {
     if (!sym || !qty || !price) continue;
     executions.push({ sym, qty: Math.abs(qty), price, comm, date, time, buySell });
   }
-  return groupExecutions(executions);
+  return buildTrades(executions);
 }
 
-function groupExecutions(executions) {
+// Core logic: process executions in chronological order per symbol per day.
+// Track running position — when position hits zero, close the trade.
+// This correctly handles multiple round trips in the same ticker same day.
+function buildTrades(executions) {
+  // Group by date + symbol
   const bySymDate = {};
   for (const ex of executions) {
     const k = `${ex.date}|${ex.sym}`;
-    if (!bySymDate[k]) bySymDate[k] = { buys: [], sells: [] };
-    if (ex.buySell.startsWith('B')) bySymDate[k].buys.push({ ...ex });
-    else bySymDate[k].sells.push({ ...ex });
+    if (!bySymDate[k]) bySymDate[k] = [];
+    bySymDate[k].push({ ...ex });
   }
 
   const trades = [];
 
-  for (const [key, { buys, sells }] of Object.entries(bySymDate)) {
+  for (const [key, execs] of Object.entries(bySymDate)) {
     const [date, sym] = key.split('|');
-    if (!buys.length || !sells.length) continue;
 
-    const totalBuyQty = buys.reduce((a, e) => a + e.qty, 0);
-    const totalSellQty = sells.reduce((a, e) => a + e.qty, 0);
-    const isLong = totalBuyQty >= totalSellQty;
+    // Sort chronologically by time
+    execs.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
 
-    if (isLong) {
-      // Sort buys chronologically — each buy lot tracks its own time
-      const buyPool = [...buys].sort((a, b) => (a.time || '').localeCompare(b.time || '')).map(b => ({ ...b }));
+    // Position tracker
+    let position = 0; // positive = long, negative = short
+    let openLots = []; // { price, qty, comm, time }
+    let tradeEntry = null; // { side, time }
 
-      for (const sell of sells) {
-        let remaining = sell.qty;
-        const matched = [];
-        for (const buy of buyPool) {
-          if (remaining <= 0) break;
-          const take = Math.min(buy.qty, remaining);
-          matched.push({
-            price: buy.price,
-            qty: take,
-            comm: buy.qty > 0 ? (buy.comm / buy.qty) * take : 0,
-            time: buy.time // carry each buy lot's own time
-          });
-          buy.qty -= take;
-          remaining -= take;
-        }
-        if (!matched.length) continue;
-        const totalQty = matched.reduce((a, b) => a + b.qty, 0);
-        const avgEntry = matched.reduce((a, b) => a + b.price * b.qty, 0) / totalQty;
-        // Weighted average entry time across matched buy lots
-        const entryTime = matched[0]?.time || '';
-        trades.push({
-          date, sym, side: 'Long',
-          time: entryTime,
-          exitTime: sell.time || '',
-          shares: Math.round(sell.qty),
-          entry: round2(avgEntry),
-          exit: round2(sell.price),
-          comm: round2(matched.reduce((a, b) => a + b.comm, 0) + sell.comm),
-          stop: 0, strat: 'Import', notes: '', emotion: 'Neutral'
-        });
+    const closeTrade = (exitPrice, exitQty, exitComm, exitTime) => {
+      if (!openLots.length) return;
+
+      // Match against open lots FIFO
+      let remaining = exitQty;
+      const matched = [];
+      for (const lot of openLots) {
+        if (remaining <= 0) break;
+        const take = Math.min(lot.qty, remaining);
+        matched.push({ price: lot.price, qty: take, comm: lot.qty > 0 ? (lot.comm / lot.qty) * take : 0, time: lot.time });
+        lot.qty -= take;
+        remaining -= take;
       }
-    } else {
-      // Short: sort sells chronologically
-      const sellPool = [...sells].sort((a, b) => (a.time || '').localeCompare(b.time || '')).map(s => ({ ...s }));
+      // Remove exhausted lots
+      openLots = openLots.filter(l => l.qty > 0);
 
-      for (const buy of buys) {
-        let remaining = buy.qty;
-        const matched = [];
-        for (const sell of sellPool) {
-          if (remaining <= 0) break;
-          const take = Math.min(sell.qty, remaining);
-          matched.push({
-            price: sell.price,
-            qty: take,
-            comm: sell.qty > 0 ? (sell.comm / sell.qty) * take : 0,
-            time: sell.time
-          });
-          sell.qty -= take;
-          remaining -= take;
+      if (!matched.length) return;
+      const totalQty = matched.reduce((a, b) => a + b.qty, 0);
+      const avgEntry = matched.reduce((a, b) => a + b.price * b.qty, 0) / totalQty;
+      const entryCost = matched.reduce((a, b) => a + b.comm, 0);
+      const entryTime = matched[0].time || '';
+
+      trades.push({
+        date, sym,
+        side: tradeEntry?.side || 'Long',
+        time: entryTime,
+        exitTime: exitTime || '',
+        shares: Math.round(totalQty),
+        entry: round2(avgEntry),
+        exit: round2(exitPrice),
+        comm: round2(entryCost + exitComm * (exitQty > 0 ? totalQty / exitQty : 1)),
+        stop: 0, strat: 'Import', notes: '', emotion: 'Neutral'
+      });
+    };
+
+    for (const ex of execs) {
+      const isBuy = ex.buySell.startsWith('B');
+      const isSell = !isBuy;
+
+      if (position === 0) {
+        // Opening new position
+        tradeEntry = { side: isBuy ? 'Long' : 'Short', time: ex.time };
+        openLots = [{ price: ex.price, qty: ex.qty, comm: ex.comm, time: ex.time }];
+        position = isBuy ? ex.qty : -ex.qty;
+      } else if (position > 0 && isBuy) {
+        // Adding to long position (scale in)
+        openLots.push({ price: ex.price, qty: ex.qty, comm: ex.comm, time: ex.time });
+        position += ex.qty;
+      } else if (position < 0 && isSell) {
+        // Adding to short position (scale in)
+        openLots.push({ price: ex.price, qty: ex.qty, comm: ex.comm, time: ex.time });
+        position -= ex.qty;
+      } else if (position > 0 && isSell) {
+        // Closing/reducing long position
+        closeTrade(ex.price, ex.qty, ex.comm, ex.time);
+        position -= ex.qty;
+        if (Math.abs(position) < 0.001) {
+          // Fully flat — reset for next round trip
+          position = 0;
+          openLots = [];
+          tradeEntry = null;
+        } else if (position < 0) {
+          // Flipped to short — start new short position with remaining qty
+          const flipQty = Math.abs(position);
+          openLots = [{ price: ex.price, qty: flipQty, comm: 0, time: ex.time }];
+          tradeEntry = { side: 'Short', time: ex.time };
         }
-        if (!matched.length) continue;
-        const totalQty = matched.reduce((a, s) => a + s.qty, 0);
-        const avgEntry = matched.reduce((a, s) => a + s.price * s.qty, 0) / totalQty;
-        const entryTime = matched[0]?.time || '';
-        trades.push({
-          date, sym, side: 'Short',
-          time: entryTime,
-          exitTime: buy.time || '',
-          shares: Math.round(buy.qty),
-          entry: round2(avgEntry),
-          exit: round2(buy.price),
-          comm: round2(matched.reduce((a, s) => a + s.comm, 0) + buy.comm),
-          stop: 0, strat: 'Import', notes: '', emotion: 'Neutral'
-        });
+      } else if (position < 0 && isBuy) {
+        // Closing/reducing short position
+        closeTrade(ex.price, ex.qty, ex.comm, ex.time);
+        position += ex.qty;
+        if (Math.abs(position) < 0.001) {
+          position = 0;
+          openLots = [];
+          tradeEntry = null;
+        } else if (position > 0) {
+          // Flipped to long
+          const flipQty = Math.abs(position);
+          openLots = [{ price: ex.price, qty: flipQty, comm: 0, time: ex.time }];
+          tradeEntry = { side: 'Long', time: ex.time };
+        }
       }
+    }
+
+    // If position still open at end of day (e.g. overnight hold), close it as-is
+    if (openLots.length && openLots.some(l => l.qty > 0)) {
+      const lastEx = execs[execs.length - 1];
+      const totalQty = openLots.reduce((a, l) => a + l.qty, 0);
+      const avgEntry = openLots.reduce((a, l) => a + l.price * l.qty, 0) / totalQty;
+      trades.push({
+        date, sym,
+        side: tradeEntry?.side || 'Long',
+        time: openLots[0].time || '',
+        exitTime: lastEx.time || '',
+        shares: Math.round(totalQty),
+        entry: round2(avgEntry),
+        exit: round2(lastEx.price),
+        comm: round2(openLots.reduce((a, l) => a + l.comm, 0)),
+        stop: 0, strat: 'Import', notes: '', emotion: 'Neutral'
+      });
     }
   }
 
-  return trades.sort((a, b) => new Date(b.date) - new Date(a.date));
+  return trades.sort((a, b) => {
+    const dd = new Date(b.date) - new Date(a.date);
+    if (dd !== 0) return dd;
+    return (b.time || '').localeCompare(a.time || '');
+  });
 }
 
 function round2(n) { return Math.round(n * 100) / 100; }
