@@ -81,26 +81,32 @@ function groupExecutions(executions) {
     const isLong = totalBuyQty >= totalSellQty;
 
     if (isLong) {
-      // Long: entry = first buy time, exit = sell time
-      const buyPool = buys.map(b => ({ ...b }));
-      // sort buys by time to get earliest entry
-      const sortedBuys = [...buys].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+      // Sort buys chronologically — each buy lot tracks its own time
+      const buyPool = [...buys].sort((a, b) => (a.time || '').localeCompare(b.time || '')).map(b => ({ ...b }));
+
       for (const sell of sells) {
         let remaining = sell.qty;
         const matched = [];
         for (const buy of buyPool) {
           if (remaining <= 0) break;
           const take = Math.min(buy.qty, remaining);
-          matched.push({ price: buy.price, qty: take, comm: (buy.comm / (buy.qty + take)) * take });
+          matched.push({
+            price: buy.price,
+            qty: take,
+            comm: buy.qty > 0 ? (buy.comm / buy.qty) * take : 0,
+            time: buy.time // carry each buy lot's own time
+          });
           buy.qty -= take;
           remaining -= take;
         }
         if (!matched.length) continue;
         const totalQty = matched.reduce((a, b) => a + b.qty, 0);
         const avgEntry = matched.reduce((a, b) => a + b.price * b.qty, 0) / totalQty;
+        // Weighted average entry time across matched buy lots
+        const entryTime = matched[0]?.time || '';
         trades.push({
           date, sym, side: 'Long',
-          time: sortedBuys[0]?.time || '',
+          time: entryTime,
           exitTime: sell.time || '',
           shares: Math.round(sell.qty),
           entry: round2(avgEntry),
@@ -110,25 +116,31 @@ function groupExecutions(executions) {
         });
       }
     } else {
-      // Short: entry = first sell time, exit = buy time
-      const sellPool = sells.map(s => ({ ...s }));
-      const sortedSells = [...sells].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+      // Short: sort sells chronologically
+      const sellPool = [...sells].sort((a, b) => (a.time || '').localeCompare(b.time || '')).map(s => ({ ...s }));
+
       for (const buy of buys) {
         let remaining = buy.qty;
         const matched = [];
         for (const sell of sellPool) {
           if (remaining <= 0) break;
           const take = Math.min(sell.qty, remaining);
-          matched.push({ price: sell.price, qty: take, comm: (sell.comm / (sell.qty + take)) * take });
+          matched.push({
+            price: sell.price,
+            qty: take,
+            comm: sell.qty > 0 ? (sell.comm / sell.qty) * take : 0,
+            time: sell.time
+          });
           sell.qty -= take;
           remaining -= take;
         }
         if (!matched.length) continue;
         const totalQty = matched.reduce((a, s) => a + s.qty, 0);
         const avgEntry = matched.reduce((a, s) => a + s.price * s.qty, 0) / totalQty;
+        const entryTime = matched[0]?.time || '';
         trades.push({
           date, sym, side: 'Short',
-          time: sortedSells[0]?.time || '',
+          time: entryTime,
           exitTime: buy.time || '',
           shares: Math.round(buy.qty),
           entry: round2(avgEntry),
