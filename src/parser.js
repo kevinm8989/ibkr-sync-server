@@ -21,10 +21,11 @@ function parseXML(xml) {
     const qty = parseFloat(attrs.quantity || attrs.Quantity || 0);
     const price = parseFloat(attrs.tradePrice || attrs.price || attrs.Price || 0);
     const comm = Math.abs(parseFloat(attrs.ibCommission || attrs.commission || attrs.Commission || 0));
-    const dateRaw = attrs.dateTime || attrs.tradeDate || attrs.TradeDate || '';
-    const date = normalizeDate(dateRaw);
-    const time = normalizeTime(dateRaw);
-    const timeFull = normalizeTimeFull(dateRaw);
+    const dateRaw = attrs.tradeDate || attrs.TradeDate || '';
+    const timeRaw = attrs.dateTime || '';
+    const date = normalizeDate(dateRaw.length === 8 ? dateRaw : timeRaw);
+    const time = normalizeTime(timeRaw);
+    const timeFull = normalizeTimeFull(timeRaw);
     const buySell = (attrs.buySell || attrs.Buy_Sell || '').toUpperCase();
     if (!sym || !qty || !price || !date) continue;
     executions.push({ sym, qty: Math.abs(qty), price, comm, date, time, timeFull, buySell });
